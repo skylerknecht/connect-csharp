@@ -2,7 +2,7 @@
 The CSharp Agent for Connect.
 
 ### Important Notes
-- The agent takes to arguments: The Server URI and The check_in job ID.
+- The agent takes two arguments: The Server URI and The check_in job ID.
 - The agent requires Newtonsoft.Json from the NUGet package manager to be installed.
 - Once built, merge system.net and newtonsoft.json DLL's to the exectuable with ILMerge using:
 
